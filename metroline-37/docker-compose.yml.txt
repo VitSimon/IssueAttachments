@@ -1,0 +1,97 @@
+version: '3.5'
+
+networks:
+  default:
+    name: ${NETWORK_NAME}
+    ipam:
+      driver: default
+      config:
+        - subnet: "${NETWORK_SUBNET}"
+
+services:
+  vcs:
+    image: gitea/gitea:1.15.6
+    container_name: ${NETWORK_NAME}_vcs
+    environment:
+      - USER_UID=1000
+      - USER_GID=1000
+      - GITEA__database__DB_TYPE=mysql
+      - GITEA__database__HOST=db:3306
+      - GITEA__database__NAME=gitea
+      - GITEA__database__USER=${MYSQL_USER}
+      - GITEA__database__PASSWD=${MYSQL_PASSWORD}
+    restart: always
+    networks:
+      default:
+        ipv4_address: "${NETWORK_IP_VCS}"
+    volumes:
+      - ./giteadata:/data
+      - ./_backup:/app/gitea/_backup
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
+    ports:
+      - "${NETWORK_PORT_VCS}:3000"
+      - "222:22"
+    depends_on:
+      - db
+
+  cicd-ui:
+    container_name: ${NETWORK_NAME}_cicd_ui
+    image: metroline/ui:1.1
+    restart: unless-stopped
+    ports:
+      - "${NETWORK_PORT_CICD_UI}:80"
+    environment:
+      METROLINE_SERVER_URL: http://${OUT_NETWORK_ENDPOINT}:${NETWORK_PORT_CICD_SERVER}
+      DEBUG: "metroline*"
+    networks:
+      default:
+        ipv4_address: "${NETWORK_IP_CICD_UI}"
+
+  cicd-server:
+    container_name: ${NETWORK_NAME}_cicd_server
+    image: metroline/server:1
+    restart: unless-stopped
+    ports:
+      - "${NETWORK_PORT_CICD_SERVER}:80"
+    environment:
+      METROLINE_HOST: http://${OUT_NETWORK_ENDPOINT}:${NETWORK_PORT_CICD_SERVER}
+      METROLINE_UI_URL: http://${OUT_NETWORK_ENDPOINT}:${NETWORK_PORT_CICD_UI}
+      # Generated with "openssl rand -hex 32"
+      METROLINE_JWT_SECRET: ${CICD_SECRET_2}
+      # Generated with "openssl rand -hex 32" ${NETWORK_IP_VCS}:${NETWORK_PORT_VCS}
+      METROLINE_RUNNER_SECRET: ${CICD_SECRET}
+      METROLINE_MONGO_URI: mongodb://cicd-mongo:27017/metroline
+      METROLINE_GITEA_CLIENT_ID: ${DRO_GITEA_CLIENT_ID}
+      METROLINE_GITEA_CLIENT_SECRET: ${DRO_GITEA_CLIENT_SECRET}
+      METROLINE_GITEA_URL: http://${OUT_NETWORK_ENDPOINT}:${NETWORK_PORT_VCS}
+      DEBUG: "metroline*"
+    networks:
+      default:
+        ipv4_address: "${NETWORK_IP_CICD_SERVER}"
+
+  cicd-runner-1:
+    container_name: ${NETWORK_NAME}_cicd_runner
+    image: metroline/runner:1.3
+    restart: unless-stopped
+    environment:
+      METROLINE_SERVER_ADDRESS: http://cicd-server
+      METROLINE_RUNNER_SECRET: ${CICD_SECRET}
+      METROLINE_JOB_DOCKER_SOCK: /var/run/docker.sock
+      METROLINE_DOCKER_OPTIONS: '{ "HostConfig": { "AutoRemove": true, "NetworkMode": "${NETWORK_NAME}" } }'
+      DEBUG: "metroline*"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      default:
+        ipv4_address: "${NETWORK_IP_CICD_RUNNER}"
+
+  cicd-mongo:
+    container_name: ${NETWORK_NAME}_cicd_db
+    image: mongo:4.2-bionic
+    restart: unless-stopped
+    volumes:
+      - ./metroline-mongo:/data/db
+    networks:
+      default:
+        ipv4_address: "${NETWORK_IP_CICD_DB}"
