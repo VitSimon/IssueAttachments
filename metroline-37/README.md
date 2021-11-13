@@ -1,1 +1,1 @@
-![LINK]{https://github.com/metroline/metroline/issues/37}
+[LINK]{https://github.com/metroline/metroline/issues/37}
