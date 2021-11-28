@@ -1,14 +1,48 @@
 version: '3.5'
 
-networks:
-  default:
-    name: ${NETWORK_NAME}
-    ipam:
-      driver: default
-      config:
-        - subnet: "${NETWORK_SUBNET}"
-
 services:
+  portainerservice:
+    image: portainer/portainer-ce:2.6.2-alpine
+    container_name: ${NETWORK_NAME}_MgrInfrastructure
+    volumes:
+      - ./portainer_data:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    ports:
+      - "${NETWORK_PORT_PORTAINER}:9000"
+
+  db:
+    image: mariadb:10.6.2-focal
+    container_name: ${NETWORK_NAME}_db
+    restart: always
+    volumes: 
+      - ${MARIADB_CONF_DIR}:/var/docker/mariadb/conf
+      - "${MARIADB_DATA_DIR}:/var/lib/mysql"
+    environment:
+      MYSQL_ROOT_PASSWORD: "${MYSQL_ROOT_PASSWORD}"
+#      MYSQL_USER: "${MYSQL_USER}"
+#      MYSQL_PASSWORD: "${MYSQL_PASSWORD}"
+    networks:
+      - default
+
+  adminer:
+    image: adminer:4.8.1-standalone
+    container_name: ${NETWORK_NAME}_MgrDB
+    restart: always
+    ports:
+      - ${NETWORK_PORT_ADMINER}:8080
+    depends_on:
+      - db
+    links:
+      - "db:database"
+    environment:
+      ADMINER_DEFAULT_DB_DRIVER: mysql
+      ADMINER_DEFAULT_DB_HOST: mariadb
+      ADMINER_DEFAULT_DB_NAME: adminer
+      ADMINER_DESIGN: nette
+      ADMINER_PLUGINS: tables-filter tinymce
+    networks:
+      - default
+
   vcs:
     image: gitea/gitea:1.15.6
     container_name: ${NETWORK_NAME}_vcs
@@ -22,8 +56,7 @@ services:
       - GITEA__database__PASSWD=${MYSQL_PASSWORD}
     restart: always
     networks:
-      default:
-        ipv4_address: "${NETWORK_IP_VCS}"
+      - default
     volumes:
       - ./giteadata:/data
       - ./_backup:/app/gitea/_backup
@@ -35,6 +68,40 @@ services:
     depends_on:
       - db
 
+  baget:
+    container_name: ${NETWORK_NAME}_artifactory
+    depends_on:
+      - db
+    restart: on-failure
+    environment:
+      ApiKey: ${ARTIFACTORY_API_KEY}
+      Storage__Type: FileSystem
+      Storage__Path: /var/baget/packages
+      Database__Type: MySql
+      Database__ConnectionString: "User ID=${MYSQL_USER};Password=${MYSQL_PASSWORD};Host=db;Database=baget;Pooling=true;"
+      Search__Type: Database
+    image: loicsharma/baget
+    logging:
+      driver: journald
+    networks:
+      - default
+    ports:
+      - "${NETWORK_PORT_BAGET}:80"
+    volumes:
+      - ./baget-data:/var/baget
+
+  registry_docker:
+    container_name: ${NETWORK_NAME}_registry_docker
+    image: registry:2.7.1
+    restart: always
+    ports:
+      - ${NETWORK_PORT_REGISTRY}:5000
+    volumes:
+      - ./registry-data:/var/lib/registry:rw
+      - ./config-docker-registry.yml:/etc/docker/registry/config-docker-registry.yml:ro
+    networks:
+      - default
+
   cicd-ui:
     container_name: ${NETWORK_NAME}_cicd_ui
     image: metroline/ui:1.1
@@ -45,8 +112,7 @@ services:
       METROLINE_SERVER_URL: http://${OUT_NETWORK_ENDPOINT}:${NETWORK_PORT_CICD_SERVER}
       DEBUG: "metroline*"
     networks:
-      default:
-        ipv4_address: "${NETWORK_IP_CICD_UI}"
+      - default
 
   cicd-server:
     container_name: ${NETWORK_NAME}_cicd_server
@@ -65,10 +131,10 @@ services:
       METROLINE_GITEA_CLIENT_ID: ${DRO_GITEA_CLIENT_ID}
       METROLINE_GITEA_CLIENT_SECRET: ${DRO_GITEA_CLIENT_SECRET}
       METROLINE_GITEA_URL: http://${OUT_NETWORK_ENDPOINT}:${NETWORK_PORT_VCS}
+#      METROLINE_GITEA_URL: http://${NETWORK_NAME}_vcs:3000
       DEBUG: "metroline*"
     networks:
-      default:
-        ipv4_address: "${NETWORK_IP_CICD_SERVER}"
+      - default
 
   cicd-runner-1:
     container_name: ${NETWORK_NAME}_cicd_runner
@@ -78,13 +144,12 @@ services:
       METROLINE_SERVER_ADDRESS: http://cicd-server
       METROLINE_RUNNER_SECRET: ${CICD_SECRET}
       METROLINE_JOB_DOCKER_SOCK: /var/run/docker.sock
-      METROLINE_DOCKER_OPTIONS: '{ "HostConfig": { "AutoRemove": true, "NetworkMode": "${NETWORK_NAME}" } }'
+#      METROLINE_DOCKER_OPTIONS: '{ "HostConfig": { "AutoRemove": true, "NetworkMode": "${NETWORK_NAME}" } }'
       DEBUG: "metroline*"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     networks:
-      default:
-        ipv4_address: "${NETWORK_IP_CICD_RUNNER}"
+      - default
 
   cicd-mongo:
     container_name: ${NETWORK_NAME}_cicd_db
@@ -93,5 +158,4 @@ services:
     volumes:
       - ./metroline-mongo:/data/db
     networks:
-      default:
-        ipv4_address: "${NETWORK_IP_CICD_DB}"
+      - default
